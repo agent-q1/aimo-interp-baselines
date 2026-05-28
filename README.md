@@ -10,7 +10,7 @@
 
 <br>
 
-This repository contains baselines for the AIMO Interpretability Challenge 2026.
+This repository contains implementations of baselines for the AIMO Interpretability Challenge 2026.
 
 *The AIMO Interpretability Challenge is a competition on distinguishing robust from spurious reasoning in frontier mathematical language models. The challenge is motivated by a central limitation of standard reasoning benchmarks: strong final-answer accuracy does not reveal whether a model genuinely relies on stable reasoning mechanisms or exploits brittle shortcuts. Building on the AI Mathematical Olympiad (AIMO) submissions and the Fields Model Initiative’s resources, the competition will provide (1) olympiad-level math problems, (2) their symbolic representations allowing generation of counterfactual variants, (3) access to best-performing AIMO models, and (4) a generous compute of up to 128 H200 GPUs. Based on these, participants will develop methods that identify which model is robust, using models’ internal representations. Our competition will also create a new, open robustness benchmark and baseline systems, aiming to provide a lasting infrastructure for standard benchmarking in interpretability. Scientifically, the competition bridges the gap between the fields of interpretability and generalization by aligning their objectives, while lastingly supporting work aiming to answer the pertaining question in AI research: can we tell if, and to what extent, is the decision making of frontier AI models generalizable, and thus, reliable?*
 
@@ -19,6 +19,8 @@ The current codebase focuses on a minimal representation-based workflow:
 - encode the last input-token hidden state from every transformer layer
 - predict `absolute_accuracy_decay` from those layer representations
 - compare linear probing and kernel baselines
+
+Upon the official announcement, we will extend the instructions with step-by-step instructions for building the baselines into a ready-to-submit Codabench bundle. Stay tuned!
 
 ## Table of Contents
 - [Table of Contents](#table-of-contents)
@@ -201,11 +203,3 @@ MPLCONFIGDIR=/tmp/mpl python scripts/plot_method_comparison.py \
   --origin input_last_token \
   --output-dir plots/method_comparison
 ```
-
-## License
-
-No standalone license file is currently included in this repository. Confirm licensing before redistribution or external reuse.
-
-## Citation
-
-No citation metadata is currently included in this repository. If you need a formal citation block, add it together with the corresponding paper, report, or project page.
