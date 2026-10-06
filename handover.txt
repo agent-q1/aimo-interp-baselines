@@ -1,0 +1,155 @@
+AIMO linear-probe baseline: GPU handover
+======================================
+
+Objective
+Run and inspect the first baseline: extract frozen-model representations, then
+train linear probes to predict absolute_accuracy_decay. Use uv. Start with a
+smoke run before the complete repeated cross-validation sweep.
+
+Repository and state
+- User fork: https://github.com/agent-q1/aimo-interp-baselines
+- Branch: sshankar/run-baseline
+- Original upstream: https://github.com/aimo-interp/baselines
+- These instructions and notebooks/exploration.ipynb are committed locally.
+  Check that the branch has been pushed before trying to clone it remotely;
+  the preparation task did not request a push.
+- Local .venv uses Python 3.12.3. All requirements (including ipykernel and
+  JupyterLab) were installed with uv; uv pip check passed.
+- Notebook was initially executed successfully and has since been edited by
+  the user. Preserve those exploration cells. It contains df_agg and df_final,
+  a dataset summary, perturbation-category counts, and saved exploration
+  outputs. Its current format validates and has no saved cell errors; not all
+  current cells have execution counts.
+- No real model extraction or probe training has been run yet. No activation
+  or result files exist. No GPU was usable on the local laptop.
+- holmes-evaluation was cloned locally but is ignored by Git; clone it on the
+  GPU machine too. The locally inspected probe_only revision was:
+  5cad2ca98fba0886ca926c7de4b80e6fa1aadef9
+
+Compute
+- The 120B generator is NOT needed. Perturbations and behavioral labels are
+  already in the CSVs.
+- Default extraction model: deepseek-ai/DeepSeek-R1-0528-Qwen3-8B.
+- Start with one NVIDIA GPU with 24 GB VRAM; the roughly 8B weights alone use
+  about 16 GB in half precision. Longer prompts require extra activation
+  memory, so check actual peak VRAM. No quantization is configured.
+- Extraction runs one prompt at a time with no gradients and no generation.
+  It deduplicates 675 rows into 137 unique original prompts.
+- Expected default feature output: 37 arrays (embedding output plus 36 layers),
+  each (675, 4096), float32; about 390 MiB total, plus metadata.csv.
+- Probes are small and can run on CPU after extraction. The trainer selects
+  CUDA automatically if available. Use --num-workers 1 initially to avoid
+  several processes competing for one GPU.
+- Allow several tens of GB of disk for model downloads and Python/CUDA
+  dependencies; checkpoint output from thousands of fits adds more usage.
+
+Setup on the GPU machine (from the repository root)
+1. Check nvidia-smi, free -h, and df -h .
+2. uv venv --python 3.12
+3. uv pip install --python .venv/bin/python -r requirements.txt ipykernel
+4. uv pip check --python .venv/bin/python
+5. git clone --branch probe_only https://github.com/Holmes-Benchmark/holmes-evaluation.git
+6. git -C holmes-evaluation checkout 5cad2ca98fba0886ca926c7de4b80e6fa1aadef9
+7. mkdir -p /tmp/aimo-mpl
+8. export MPLCONFIGDIR=/tmp/aimo-mpl
+9. uv run --python .venv/bin/python python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+   Confirm CUDA is available before starting extraction. The requirements have
+   broad lower bounds; if the installed PyTorch CUDA runtime is incompatible
+   with the server driver, select a compatible official PyTorch wheel build
+   using uv rather than assuming the latest wheel will work.
+10. uv run --python .venv/bin/python python scripts/probe.py --help
+
+Data and interpretation
+- math-robust-agg.csv: 141 records, 137 unique problem IDs. Some category/source
+  cells contain JSON lists representing aggregated categories.
+- math-robust-final.csv: 675 records, 137 unique problem IDs. Counts:
+  domain 98, distract 127, rename 105, rephrase 105, typos 99, OVERALL 141.
+- All model_id values are qwen3-8b:low. Per-category permutation_source is
+  gpt-oss-120b-gguf_low. OVERALL is an aggregate marker, not another generator.
+  Its behavioral columns match the records in math-robust-agg.csv.
+- The default extraction checkpoint is different from the behavioral model
+  identifier. Preserve the repo default for an initial reproduction, and
+  clearly document this difference; do not silently substitute a checkpoint.
+- Features use original_problem, not the perturbed text. With chat templates,
+  the final input token can be part of the assistant generation prefix.
+- Each probe uses one category and one layer. There is no prediction ensemble.
+
+Extraction command
+uv run --python .venv/bin/python python scripts/encode.py \
+  --dataset-csv data/math-robust-final.csv \
+  --model-id deepseek-ai/DeepSeek-R1-0528-Qwen3-8B \
+  --output-dir data/eval_adoption_internals_table_filtered \
+  --device cuda
+
+Verify metadata.csv has 675 rows and contiguous row_id values, every layer array
+has the matching row count, and values are finite. Record extraction time,
+checkpoint revision, library versions, and peak GPU memory.
+
+Initial probe smoke run (all layers/categories, fewer repeats)
+uv run --python .venv/bin/python python scripts/probe.py \
+  --internals-dir data/eval_adoption_internals_table_filtered \
+  --results-dir results/linear_probe_smoke \
+  --model-name deepseek-r1-0528-qwen3-8b \
+  --target-col absolute_accuracy_decay \
+  --method probe --seeds 42 --num-folds 2 --num-workers 1
+
+This is still 888 fits with 37 layer files. For a quicker first check, create a
+separate ignored internals directory containing metadata.csv and just one
+copied layer file; point the same command there and use a separate results
+directory. That gives 24 fits. Do not delete or alter the full extracted data.
+
+Full probe command after smoke validation
+uv run --python .venv/bin/python python scripts/probe.py \
+  --internals-dir data/eval_adoption_internals_table_filtered \
+  --results-dir results/linear_probe_full \
+  --model-name deepseek-r1-0528-qwen3-8b \
+  --target-col absolute_accuracy_decay \
+  --method probe --seeds 42,43,44,45,46 --num-folds 4 --num-workers 1
+
+Default sweep: 37 layers x 6 categories x 5 seeds x 4 folds x 2 controls =
+8,880 fits. NONE uses true targets. RANDOMIZATION separately shuffles targets
+within each split. Approximate split sizes are 60% train, 15% validation,
+25% test. PCA is disabled by default; if enabled it fits only training vectors.
+The inspected Holmes regression probe uses SmoothL1Loss, not MSE. The trainer
+uses at most 20 epochs, validation-loss early
+stopping with patience 10, and a best-checkpoint test evaluation.
+
+Important checks before trusting or resuming results
+- Holmes get_local_run_id() at the pinned revision includes the fold again at
+  the end of its path. scripts/probe.py expected_done_dir() assumes an older
+  path ending in /seed/0/done. Check actual log paths: the current skip check
+  and threshold-metric augmentation may miss the real metrics.csv. Fix and
+  verify actual output-path consistency before relying on resume behavior.
+- Holmes trainer.test(ckpt_path='best') tests a loaded checkpoint, while
+  train_run() returns the original probing_model. Verify whether the model
+  used for later threshold metrics has the same weights as the tested best
+  checkpoint. If not, use best-checkpoint weights for consistent evaluation.
+- Cross-validation splits rows, not groups of problem_id. OVERALL has some
+  repeated problem IDs, so identical prompt features can cross folds. Report
+  this limitation; group-aware evaluation would be a separate methodological
+  change rather than an exact reproduction.
+- Automatic binary thresholds are selected on training predictions against
+  model_is_robust. Robust means predicted decay < threshold. The randomized
+  regression control still uses original binary labels for threshold metrics;
+  assess the real-vs-shuffled comparison primarily with regression metrics.
+- Broad dependency bounds mean newer libraries may expose compatibility
+  issues. Imports passed locally; actual training has not yet been validated.
+
+Analysis after successful training
+uv run --python .venv/bin/python python scripts/plot_probe_layer_curves.py \
+  --results-dirs results/linear_probe_full \
+  --target-prefix absolute_accuracy_decay --metric-set regression \
+  --column-mode origin --output-dir plots/linear_probe_full
+
+Plot test error and Pearson correlation across layers per category, comparing
+NONE with RANDOMIZATION. Means and +/- one standard deviation aggregate
+seed/fold scores; this is not prediction ensembling or a confidence interval.
+Do not claim empirical success until actual results are available. Predictive
+information does not establish a causal mechanism for robustness.
+
+Notebook kernel (optional)
+uv run --python .venv/bin/python python -m ipykernel install --sys-prefix \
+  --name aimo-interp --display-name 'AIMO Interp (.venv)'
+uv run --python .venv/bin/python jupyter lab notebooks/exploration.ipynb
+Use an SSH tunnel for remote notebook access; do not expose a notebook server
+publicly or commit authentication material.
